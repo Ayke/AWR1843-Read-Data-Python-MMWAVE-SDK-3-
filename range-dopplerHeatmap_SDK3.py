@@ -2,9 +2,11 @@ import serial
 import time
 import numpy as np
 import matplotlib.pyplot as plt
+from mpl_toolkits.mplot3d import Axes3D
 
 # Change the configuration file name
-configFileName = '1843RangeDoppler.cfg'
+# configFileName = '1843RangeDoppler.cfg'
+configFileName = '1843profile.cfg'
 
 CLIport = {}
 Dataport = {}
@@ -23,12 +25,12 @@ def serialConfig(configFileName):
     # Open the serial ports for the configuration and the data ports
     
     # Raspberry pi
-    #CLIport = serial.Serial('/dev/ttyACM0', 115200)
-    #Dataport = serial.Serial('/dev/ttyACM1', 921600)
+    CLIport = serial.Serial('/dev/ttyACM0', 115200)
+    Dataport = serial.Serial('/dev/ttyACM1', 921600)
     
     # Windows
-    CLIport = serial.Serial('COM9', 115200)
-    Dataport = serial.Serial('COM11', 921600)
+    #CLIport = serial.Serial('COM9', 115200)
+    #Dataport = serial.Serial('COM11', 921600)
 
     # Read the configuration file and send it to the board
     config = [line.rstrip('\r\n') for line in open(configFileName)]
@@ -106,11 +108,21 @@ def readAndParseData18xx(Dataport, configParameters):
     MMWDEMO_OUTPUT_MSG_NOISE_PROFILE = 3
     MMWDEMO_OUTPUT_MSG_AZIMUT_STATIC_HEAT_MAP = 4
     MMWDEMO_OUTPUT_MSG_RANGE_DOPPLER_HEAT_MAP = 5
+    MMWDEMO_OUTPUT_MSG_STATS = 6
+    MMWDEMO_OUTPUT_MSG_DETECTED_POINTS_SIDE_INFO = 7
+    MMWDEMO_OUTPUT_MSG_AZIMUT_ELEVATION_STATIC_HEAT_MAP = 8
+    MMWDEMO_OUTPUT_MSG_TEMPERATURE_STATS = 9
+    MMWDEMO_OUTPUT_MSG_MAX = 10
+
+
     maxBufferSize = 2**15
     tlvHeaderLengthInBytes = 8
     pointLengthInBytes = 16
     magicWord = [2, 1, 4, 3, 6, 5, 8, 7]
-    
+
+    # word array to convert 4 bytes to a 32 bit number (uint32)
+    word = [1, 2**8, 2**16, 2**24]
+
     # Initialize variables
     magicOK = 0 # Checks if magic number has been read
     dataOK = 0 # Checks if the data has been read correctly
@@ -129,6 +141,10 @@ def readAndParseData18xx(Dataport, configParameters):
     # Check that the buffer has some data
     if byteBufferLength > 16:
         
+
+        ########################################
+        ## Optimize the following to speed up ##
+        ########################################
         # Check for all possible locations of the magic word
         possibleLocs = np.where(byteBuffer == magicWord[0])[0]
 
@@ -152,8 +168,6 @@ def readAndParseData18xx(Dataport, configParameters):
             if byteBufferLength < 0:
                 byteBufferLength = 0
                 
-            # word array to convert 4 bytes to a 32 bit number
-            word = [1, 2**8, 2**16, 2**24]
             
             # Read the total packet length
             totalPacketLen = np.matmul(byteBuffer[12:12+4],word)
@@ -163,10 +177,7 @@ def readAndParseData18xx(Dataport, configParameters):
                 magicOK = 1
     
     # If magicOK is equal to 1 then process the message
-    if magicOK:
-        # word array to convert 4 bytes to a 32 bit number
-        word = [1, 2**8, 2**16, 2**24]
-        
+    if magicOK:        
         # Initialize the pointer index
         idX = 0
         
@@ -192,16 +203,13 @@ def readAndParseData18xx(Dataport, configParameters):
 
         # Read the TLV messages
         for tlvIdx in range(numTLVs):
-            
-            # word array to convert 4 bytes to a 32 bit number
-            word = [1, 2**8, 2**16, 2**24]
-
             # Check the header of the TLV message
             tlv_type = np.matmul(byteBuffer[idX:idX+4],word)
             idX += 4
             tlv_length = np.matmul(byteBuffer[idX:idX+4],word)
             idX += 4
 
+        
             # Read the data depending on the TLV message
             if tlv_type == MMWDEMO_UART_MSG_DETECTED_POINTS:
 
@@ -226,38 +234,56 @@ def readAndParseData18xx(Dataport, configParameters):
                 # Store the data in the detObj dictionary
                 detObj = {"numObj": numDetectedObj, "x": x, "y": y, "z": z, "velocity":velocity}
                 dataOK = 1
-            elif tlv_type == MMWDEMO_OUTPUT_MSG_RANGE_DOPPLER_HEAT_MAP:
 
-                # Get the number of bytes to read
-                numBytes = 2*configParameters["numRangeBins"]*configParameters["numDopplerBins"]
+                print("numObj:", len(x))
+                for i in range(len(x)):
+                    print("x:", x[i], ",y:", y[i], ",z:", z[i], ",speed:", velocity[i])
+                # plt.clf()
+                ax.cla()
+                # ax = plt.axes(projection='3d')
+                ax.scatter3D(x,y,z)
+                plt.show(block=False)
+                # plt.draw()
+                plt.pause(0.001)
+            # elif tlv_type == MMWDEMO_OUTPUT_MSG_RANGE_DOPPLER_HEAT_MAP:
+            #     # Get the number of bytes to read
+            #     numBytes = 2*configParameters["numRangeBins"]*configParameters["numDopplerBins"]
+            #     assert tlv_length == numBytes, "tlv_length not consistent to numBytes"
 
-                # Convert the raw data to int16 array
-                payload = byteBuffer[idX:idX + numBytes]
-                idX += numBytes
-                rangeDoppler = payload.view(dtype=np.int16)
+            #     # Convert the raw data to int16 array
+            #     payload = byteBuffer[idX:idX + numBytes]
+            #     idX += numBytes
+            #     rangeDoppler = payload.view(dtype=np.int16)
 
-                # Some frames have strange values, skip those frames
-                # TO DO: Find why those strange frames happen
-                if np.max(rangeDoppler) > 10000:
-                    continue
+            #     # Some frames have strange values, skip those frames
+            #     # TO DO: Find why those strange frames happen
+            #     if np.max(rangeDoppler) > 10000:
+            #         continue
 
-                # Convert the range doppler array to a matrix
-                rangeDoppler = np.reshape(rangeDoppler, (configParameters["numDopplerBins"], configParameters["numRangeBins"]),'F') #Fortran-like reshape
-                rangeDoppler = np.append(rangeDoppler[int(len(rangeDoppler)/2):], rangeDoppler[:int(len(rangeDoppler)/2)], axis=0)
+            #     # Convert the range doppler array to a matrix
+            #     rangeDoppler = np.reshape(rangeDoppler, (configParameters["numDopplerBins"], configParameters["numRangeBins"]),'F') #Fortran-like reshape
+            #     rangeDoppler = np.append(rangeDoppler[int(len(rangeDoppler)/2):], rangeDoppler[:int(len(rangeDoppler)/2)], axis=0)
 
-                # Generate the range and doppler arrays for the plot
-                rangeArray = np.array(range(configParameters["numRangeBins"]))*configParameters["rangeIdxToMeters"]
-                dopplerArray = np.multiply(np.arange(-configParameters["numDopplerBins"]/2 , configParameters["numDopplerBins"]/2), configParameters["dopplerResolutionMps"])
+            #     # Generate the range and doppler arrays for the plot
+            #     rangeArray = np.array(range(configParameters["numRangeBins"]))*configParameters["rangeIdxToMeters"]
+            #     dopplerArray = np.multiply(np.arange(-configParameters["numDopplerBins"]/2 , configParameters["numDopplerBins"]/2), configParameters["dopplerResolutionMps"])
                 
-                plt.clf()
-                cs = plt.contourf(rangeArray,dopplerArray,rangeDoppler)
-                fig.colorbar(cs, shrink=0.9)
-                fig.canvas.draw()
-                plt.pause(0.1)
-            
-                
-                
- 
+            #     plt.clf()
+            #     cs = plt.contourf(rangeArray,dopplerArray,rangeDoppler)
+            #     fig.colorbar(cs, shrink=0.9)
+            #     fig.canvas.draw()
+            #     plt.pause(0.1)
+            # elif tlv_type == MMWDEMO_OUTPUT_MSG_STATS:
+            #     interFrameProcessingTime = getWord(byteBuffer, idX)
+            #     np.matmul(byteBuffer[idX:idX+4],word)
+            #     transmitOutputTime
+            #     interFrameProcessingMargin
+            #     interChirpProcessingMargin
+            #     activeFrameCPULoad
+            #     interFrameCPULoad
+            else:
+                idX += tlv_length
+
         # Remove already processed data
         if idX > 0 and byteBufferLength>idX:
             shiftSize = totalPacketLen
@@ -286,15 +312,18 @@ detObj = {}
 frameData = {}    
 currentIndex = 0
 fig = plt.figure()
+ax = fig.add_subplot(111, projection='3d')
+# plt.ion()
+# plt.show()
 while True:
     try:
-        dataOk, frameNumber, detObj = readAndParseData18xx(Dataport, configParameters)
+        dataOK, frameNumber, detObj = readAndParseData18xx(Dataport, configParameters)
 
-        if dataOk:
+        if dataOK:
             # Store the current frame into frameData
             frameData[currentIndex] = detObj
             currentIndex += 1
-        
+
     # Stop the program and close everything if Ctrl + c is pressed
     except KeyboardInterrupt:
         CLIport.write(('sensorStop\n').encode())
